@@ -149,7 +149,12 @@
         </label>
         <label>幣別<select name="currency"></select></label>
       </div>
-      <label>備註（選填）<input type="text" name="note" maxlength="200"></label>
+      <label>備註（選填）
+        <span class="row">
+          <input type="text" name="note" maxlength="200">
+          <button type="button" class="btn icon mic" data-voice="note" aria-label="語音輸入備註">🎤</button>
+        </span>
+      </label>
       <div class="actions">
         <button type="submit" class="btn primary grow" data-role="submit">儲存</button>
         <button type="button" class="btn ghost hidden" data-role="cancelEdit">取消編輯</button>

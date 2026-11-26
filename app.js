@@ -386,6 +386,42 @@ function listen({ title = '請說話…' } = {}) {
   });
 }
 
+/* ---------- 游標位置：語音文字插入在游標處 ---------- */
+/** 記住文字欄位最後的游標／選取位置（按 🎤 時欄位會失去焦點，所以要先記下來） */
+function trackCursor(el) {
+  const save = () => {
+    try { el._cur = { start: el.selectionStart, end: el.selectionEnd, value: el.value }; } catch { /* ignore */ }
+  };
+  // 只在使用者正在編輯這個欄位時記錄（程式改值時不算，以免把游標誤記到最後）
+  ['focus', 'click', 'keyup', 'input', 'select', 'touchend'].forEach((ev) => el.addEventListener(ev, () => setTimeout(() => {
+    if (document.activeElement === el) save();
+  }, 0)));
+  el.addEventListener('blur', save); // 失焦當下的選取位置仍有效
+}
+
+/**
+ * 把語音文字插入游標處；有反白選取時取代選取的文字。
+ * 沒點過欄位、或欄位內容已被程式改過（例如一句話記帳）時，接在最後面。
+ */
+function insertAtCursor(el, text) {
+  const v = el.value;
+  const c = el._cur;
+  let start = v.length, end = v.length;
+  if (c && c.value === v && Number.isInteger(c.start)) {
+    start = Math.min(c.start, v.length);
+    end = Math.min(Math.max(c.end, start), v.length);
+  }
+  const before = v.slice(0, start), after = v.slice(end);
+  let ins = text.trim();
+  // 英數字相鄰時補空白，中文則直接接上
+  if (/[A-Za-z0-9]$/.test(before) && /^[A-Za-z0-9]/.test(ins)) ins = ' ' + ins;
+  if (/[A-Za-z0-9]$/.test(ins) && /^[A-Za-z0-9]/.test(after)) ins += ' ';
+  el.value = before + ins + after;
+  const pos = before.length + ins.length;
+  el._cur = { start: pos, end: pos, value: el.value }; // 下次語音接在這次的後面
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function matchCategory(type, spoken) {
   const word = spoken.replace(/[，。,.!！?？、\s]/g, '');
   const cats = data.categories[type];
@@ -397,13 +433,13 @@ function matchCategory(type, spoken) {
 
 async function voiceInto(type, field, btn) {
   const f = forms[type];
-  const titles = { item: '請說「項目」…', amount: `請說「${TYPES[type].amountLabel}」…`, category: '請說「類別」…' };
+  const titles = { item: '請說「項目」…', note: '請說「備註」…', amount: `請說「${TYPES[type].amountLabel}」…`, category: '請說「類別」…' };
   btn.classList.add('listening');
   try {
     const text = await listen({ title: titles[field] });
     if (!text) return;
-    if (field === 'item') {
-      f.form.item.value = text;
+    if (field === 'item' || field === 'note') {
+      insertAtCursor(f.form[field], text);
     } else if (field === 'category') {
       const hit = matchCategory(type, text);
       if (hit) {
@@ -508,7 +544,16 @@ function buildForms() {
     $('[data-role=newCatOk]', sec).onclick = addCat;
     f.newCatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addCat(); } });
 
-    $$('[data-voice]', sec).forEach((btn) => { btn.onclick = () => voiceInto(type, btn.dataset.voice, btn); });
+    $$('[data-voice]', sec).forEach((btn) => {
+      // 在 iPhone 上，按下按鈕前先記住游標（pointerdown 會比欄位失焦更早觸發）
+      btn.addEventListener('pointerdown', () => {
+        const el = form[btn.dataset.voice];
+        if (el && document.activeElement === el) el._cur = { start: el.selectionStart, end: el.selectionEnd, value: el.value };
+      });
+      btn.onclick = () => voiceInto(type, btn.dataset.voice, btn);
+    });
+    trackCursor(form.item);
+    trackCursor(form.note);
     $('[data-role=quickVoice]', sec).onclick = () => quickVoice(type);
     f.cancelEdit.onclick = () => resetForm(type);
     form.addEventListener('submit', (e) => { e.preventDefault(); submitForm(type); });

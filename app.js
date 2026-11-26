@@ -262,65 +262,158 @@ function updateStatus() {
  * 語音輸入（Web Speech API）
  * ============================================================ */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let activeRec = null;
+let session = null; // 目前的語音聆聽工作階段
 
-function listen() {
+const SR_ERRORS = {
+  'not-allowed': '麥克風權限被拒絕：iPhone 請到「設定 → Safari → 麥克風」允許，或改用鍵盤上的麥克風聽寫',
+  'service-not-allowed': '語音服務無法使用（請確認網址是 https，或改用鍵盤上的麥克風聽寫）',
+  'audio-capture': '找不到麥克風',
+  network: '語音辨識需要網路連線',
+  'language-not-supported': '不支援這個辨識語言，請到設定更換',
+};
+
+/** 把一次辨識的所有結果組成文字；iPhone 有時會把前面的內容重複回傳，這裡去重 */
+function joinResults(results) {
+  let t = '';
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i][0].transcript;
+    if (t && r.trim().startsWith(t.trim())) t = r;
+    else t += r;
+  }
+  return t;
+}
+
+/**
+ * 開始聆聽，回傳辨識文字。
+ * - 中途停頓不會斷：iPhone 停頓時辨識會自行結束，這裡會自動接著再聽，並把前後文字接起來
+ * - 結束條件：按「完成」、說完後安靜超過設定秒數、或 60 秒上限
+ * - 語音服務沒反應（iPhone 偶發卡住）時 5 秒內自動放棄並提示，不會一直卡著
+ */
+function listen({ title = '請說話…' } = {}) {
   return new Promise((resolve, reject) => {
     if (!SR) return reject(new Error('此瀏覽器不支援語音辨識，請改用鍵盤上的麥克風（聽寫）輸入'));
-    if (activeRec) { try { activeRec.abort(); } catch { /* ignore */ } }
-    const rec = new SR();
-    activeRec = rec;
-    rec.lang = config.lang || 'zh-TW';
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    rec.continuous = false;
-    let finalText = '';
-    let done = false;
+    const hadPrev = !!session;
+    if (session) session.cancel(); // 上一次沒結束乾淨時先清掉，避免卡住
+    const silenceMs = (config.silence ?? 3) * 1000; // 0 = 只按「完成」才結束
     const overlay = $('#voiceOverlay');
     const hint = $('#voiceHint');
-    hint.textContent = '請說話…';
-    overlay.classList.remove('hidden');
-    const finish = (fn, v) => {
-      if (done) return;
-      done = true;
+    const live = $('#voiceText');
+    const s = { committed: '', current: '', rec: null, done: false, heardAt: 0, startedAt: Date.now(), alive: false, restarts: 0, timer: null };
+    session = s;
+    const text = () => (s.committed + s.current).replace(/\s+/g, ' ').trim();
+    const render = () => { live.textContent = text() || '…'; };
+
+    const killRec = () => {
+      const r = s.rec;
+      s.rec = null;
+      if (!r) return;
+      r.onresult = r.onerror = r.onend = r.onstart = r.onaudiostart = null;
+      try { r.abort(); } catch { /* ignore */ }
+    };
+    const cleanup = () => {
+      clearInterval(s.timer);
+      killRec();
       overlay.classList.add('hidden');
-      activeRec = null;
-      fn(v);
+      if (session === s) session = null;
     };
-    rec.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += t; else interim += t;
-      }
-      hint.textContent = finalText + interim || '請說話…';
+    const finish = (err) => {
+      if (s.done) return;
+      s.done = true;
+      const result = text();
+      cleanup();
+      if (err && !result) reject(err);
+      else resolve(result); // 有聽到東西就先用，錯誤只在什麼都沒聽到時才報
     };
-    rec.onerror = (e) => {
-      const map = {
-        'not-allowed': '麥克風權限被拒絕，請在瀏覽器設定允許使用麥克風',
-        'service-not-allowed': '語音服務無法使用（請確認網址是 https）',
-        'no-speech': '沒有聽到聲音，請再試一次',
-        'audio-capture': '找不到麥克風',
-        network: '語音辨識需要網路連線',
-        aborted: '',
+    s.cancel = () => { if (s.done) return; s.done = true; cleanup(); resolve(''); };
+
+    const startRec = () => {
+      if (s.done) return;
+      const rec = new SR();
+      s.rec = rec;
+      rec.lang = config.lang || 'zh-TW';
+      rec.interimResults = true;
+      rec.continuous = true;
+      rec.maxAlternatives = 1;
+      rec.onstart = rec.onaudiostart = () => { s.alive = true; };
+      rec.onresult = (e) => {
+        s.alive = true;
+        s.current = joinResults(e.results);
+        s.heardAt = Date.now();
+        render();
       };
-      const msg = map[e.error] ?? `語音辨識錯誤：${e.error}`;
-      finish(msg ? reject : resolve, msg ? new Error(msg) : '');
+      rec.onerror = (e) => {
+        if (e.error === 'no-speech' || e.error === 'aborted') return; // 交給 onend 重新開始聽
+        finish(new Error(SR_ERRORS[e.error] || `語音辨識錯誤：${e.error}`));
+      };
+      rec.onend = () => {
+        if (s.done || s.rec !== rec) return;
+        // 停頓造成辨識結束：保存這段，再開新的一段繼續聽
+        if (s.current) { s.committed += s.current + ' '; s.current = ''; }
+        s.rec = null;
+        if (++s.restarts > 40) return finish();
+        setTimeout(() => { try { startRec(); } catch (err) { finish(err); } }, 200);
+      };
+      rec.start();
     };
-    rec.onend = () => finish(resolve, finalText.trim());
-    $('#voiceStop').onclick = () => { try { rec.stop(); } catch { /* ignore */ } };
-    try { rec.start(); } catch (err) { finish(reject, err); }
+
+    $('#voiceDone').onclick = () => finish();
+    $('#voiceCancel').onclick = () => s.cancel();
+    hint.textContent = title;
+    live.textContent = '…';
+    overlay.classList.remove('hidden');
+
+    s.timer = setInterval(() => {
+      const now = Date.now();
+      if (!s.alive && now - s.startedAt > 5000) {
+        return finish(new Error('語音服務沒有回應，請再按一次 🎤，或改用鍵盤上的麥克風聽寫'));
+      }
+      if (now - s.startedAt > 60000) return finish();
+      if (!text()) {
+        if (now - s.startedAt > 15000) return finish();
+        hint.textContent = title;
+        return;
+      }
+      if (silenceMs > 0) {
+        const left = silenceMs - (now - s.heardAt);
+        if (left <= 0) return finish();
+        hint.textContent = `說完請按「完成」（停頓 ${Math.ceil(left / 1000)} 秒自動完成）`;
+      } else {
+        hint.textContent = '說完請按「完成」';
+      }
+    }, 200);
+
+    setTimeout(() => { try { startRec(); } catch (err) { finish(err); } }, hadPrev ? 350 : 0);
   });
+}
+
+function matchCategory(type, spoken) {
+  const word = spoken.replace(/[，。,.!！?？、\s]/g, '');
+  const cats = data.categories[type];
+  return cats.find((c) => c === word)
+    || [...cats].sort((x, y) => y.length - x.length).find((c) => word.includes(c))
+    || cats.find((c) => word && c.includes(word))
+    || null;
 }
 
 async function voiceInto(type, field, btn) {
   const f = forms[type];
+  const titles = { item: '請說「項目」…', amount: `請說「${TYPES[type].amountLabel}」…`, category: '請說「類別」…' };
   btn.classList.add('listening');
   try {
-    const text = await listen();
+    const text = await listen({ title: titles[field] });
     if (!text) return;
     if (field === 'item') {
       f.form.item.value = text;
+    } else if (field === 'category') {
+      const hit = matchCategory(type, text);
+      if (hit) {
+        f.form.category.value = hit;
+      } else {
+        const word = text.replace(/[，。,.!！?？、\s]/g, '').slice(0, 20);
+        f.newCatBox.classList.remove('hidden');
+        f.newCatInput.value = word;
+        toast(`沒有「${word}」這個類別，按「新增」即可建立`);
+      }
     } else {
       const v = parseSpokenAmount(text);
       if (Number.isNaN(v)) { toast(`聽到「${text}」，但找不到數字`, 'error'); return; }
@@ -330,7 +423,7 @@ async function voiceInto(type, field, btn) {
     }
   } catch (e) {
     toast(e.message, 'error');
-    f.form[field].focus(); // 語音 API 不能用時，直接用鍵盤上的 🎤 聽寫
+    if (field !== 'category') f.form[field].focus(); // 語音不能用時，可直接用鍵盤上的 🎤 聽寫
   } finally {
     btn.classList.remove('listening');
   }
@@ -338,7 +431,7 @@ async function voiceInto(type, field, btn) {
 
 async function quickVoice(type) {
   try {
-    const text = await listen();
+    const text = await listen({ title: '請說：日期 時間 類別 項目 金額' });
     if (!text) return;
     const r = parseQuickEntry(text, data.categories[type]);
     const f = forms[type].form;
@@ -1012,6 +1105,7 @@ function openSettings() {
   $('#cfgUrl').value = config.apiUrl || '';
   $('#cfgToken').value = config.token || '';
   $('#cfgLang').value = config.lang || 'zh-TW';
+  $('#cfgSilence').value = String(config.silence ?? 3);
   $('#testResult').textContent = '';
   $('#rateFetchInfo').textContent = '';
   $('#voiceSupport').textContent = SR
@@ -1107,7 +1201,7 @@ async function saveSettings() {
   const newSettings = { baseCurrency: draftSettings.baseCurrency, rates: cleanRates };
   const settingsChanged = JSON.stringify(newSettings) !== JSON.stringify({ baseCurrency: data.settings.baseCurrency, rates: Object.fromEntries(Object.entries(data.settings.rates).filter(([, v]) => v > 0)) });
 
-  config = { ...config, mode, apiUrl: url, token, lang: $('#cfgLang').value };
+  config = { ...config, mode, apiUrl: url, token, lang: $('#cfgLang').value, silence: Number($('#cfgSilence').value) };
   store.set(LS.config, config);
   $('#settingsDlg').close();
 

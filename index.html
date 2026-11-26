@@ -117,7 +117,7 @@
         <h2 data-role="title"></h2>
         <button type="button" class="btn ghost voice-quick" data-role="quickVoice">🎤 一句話記帳</button>
       </div>
-      <p class="muted small voice-hint">一句話例：「昨天晚上七點半 晚餐 拉麵 280 元」（日期、時間可省略）</p>
+      <p class="muted small voice-hint">一句話例：「昨天晚上七點半 晚餐 拉麵 280 元」（日期、時間可省略；中途停頓沒關係，說完按「完成」）</p>
       <div class="grid2">
         <label>日期<input type="date" name="date" required></label>
         <label>時間<input type="time" name="time" required></label>
@@ -125,6 +125,7 @@
       <label>類別
         <span class="row">
           <select name="category" required></select>
+          <button type="button" class="btn icon mic" data-voice="category" aria-label="語音選類別">🎤</button>
           <button type="button" class="btn icon" data-role="addCat" title="新增類別" aria-label="新增類別">＋</button>
         </span>
       </label>
@@ -207,6 +208,15 @@
             <option value="ja-JP">日本語</option>
           </select>
         </label>
+        <label>說完後停頓多久自動完成
+          <select id="cfgSilence">
+            <option value="2">2 秒</option>
+            <option value="3">3 秒（預設）</option>
+            <option value="5">5 秒</option>
+            <option value="8">8 秒</option>
+            <option value="0">不自動，按「完成」才結束</option>
+          </select>
+        </label>
         <p class="muted small" id="voiceSupport"></p>
       </fieldset>
 
@@ -218,7 +228,17 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <div id="voiceOverlay" class="voice-overlay hidden"><div class="voice-box"><div class="pulse">🎤</div><p id="voiceHint">請說話…</p><button type="button" class="btn" id="voiceStop">停止</button></div></div>
+  <div id="voiceOverlay" class="voice-overlay hidden">
+    <div class="voice-box">
+      <div class="pulse">🎤</div>
+      <p id="voiceHint" class="muted small">請說話…</p>
+      <p id="voiceText" class="voice-text">…</p>
+      <div class="actions">
+        <button type="button" class="btn ghost grow" id="voiceCancel">取消</button>
+        <button type="button" class="btn primary grow" id="voiceDone">完成</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

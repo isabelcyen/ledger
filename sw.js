@@ -1,5 +1,5 @@
 // 讓網頁可「加到主畫面」並在沒網路時也能打開（資料同步仍需網路）
-const CACHE = 'ledger-v3';
+const CACHE = 'ledger-v4';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'voice-parse.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

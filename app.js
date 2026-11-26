@@ -626,13 +626,13 @@ function fillCurrencySelect(type, ensure) {
 }
 function fillCurrencySelects() { Object.keys(TYPES).forEach((t) => fillCurrencySelect(t)); }
 
-function recItemHTML(r, type, { showType = false, pending = false } = {}) {
+function recItemHTML(r, type, { showType = false, pending = false, hideCategory = false } = {}) {
   const sign = type === 'expense' ? '−' : '+';
   const d = parseDate(r.date);
   return `<li data-id="${esc(r.id)}" data-type="${type}">
     <div class="rec-main">
       <div class="rec-title">${showType ? `<span class="muted">${TYPES[type].label}・</span>` : ''}${esc(r.item)}${pending ? '<span class="pending-dot" title="尚未同步"></span>' : ''}</div>
-      <div class="rec-sub">${d.getMonth() + 1}/${d.getDate()}（${WEEK[d.getDay()]}）${esc(r.time)}・${esc(r.category)}${r.note ? `・${esc(r.note)}` : ''}</div>
+      <div class="rec-sub">${d.getMonth() + 1}/${d.getDate()}（${WEEK[d.getDay()]}）${esc(r.time)}${hideCategory ? '' : `・${esc(r.category)}`}${r.note ? `・${esc(r.note)}` : ''}</div>
     </div>
     <div class="rec-amt ${type}">${sign}${money(r.amount, r.currency)}</div>
     <button type="button" class="rec-del" aria-label="刪除">✕</button>
@@ -756,20 +756,41 @@ function renderStats() {
   renderCats('#incCats', '#incCatTotal', recs.income, inc, base);
   renderByCurrency(recs);
 
-  const all = sortRecs([...recs.expense, ...recs.income]);
-  $('#detailCount').textContent = `${all.length} 筆`;
-  const shown = all.slice(0, 300);
+  renderDetailByCategory(recs, base);
+}
+
+/** 明細：依類別分組（支出在前、收入在後，各依金額由大到小），每組顯示類別名稱、筆數、小計；點組名可收合 */
+const collapsedCats = new Set();
+function renderDetailByCategory(recs, base) {
+  const total = recs.expense.length + recs.income.length;
+  $('#detailCount').textContent = `${total} 筆`;
   let html = '';
-  let lastDate = '';
-  for (const r of shown) {
-    if (r.date !== lastDate && stats.gran !== 'day') {
-      const d = parseDate(r.date);
-      html += `<li class="date-sep">${r.date}（${WEEK[d.getDay()]}）</li>`;
-      lastDate = r.date;
+  let shown = 0;
+  const LIMIT = 500;
+  for (const type of ['expense', 'income']) {
+    const groups = new Map();
+    for (const r of recs[type]) {
+      if (!groups.has(r.category)) groups.set(r.category, []);
+      groups.get(r.category).push(r);
     }
-    html += recItemHTML(r, r.type, { showType: true });
+    const sum = (list) => list.reduce((s, r) => { const v = toBase(r.amount, r.currency); return Number.isNaN(v) ? s : s + v; }, 0);
+    const sorted = [...groups.entries()].map(([cat, list]) => ({ cat, list: sortRecs(list), sum: sum(list) }))
+      .sort((a, b) => b.sum - a.sum);
+    for (const g of sorted) {
+      const key = `${type}|${g.cat}`;
+      const closed = collapsedCats.has(key);
+      html += `<li class="cat-sep ${type}" data-cat-key="${esc(key)}">
+        <span class="cat-name"><span class="caret">${closed ? '▸' : '▾'}</span>${TYPES[type].label}・${esc(g.cat)}</span>
+        <span class="cat-sum">${g.list.length} 筆・<b>${type === 'expense' ? '−' : '+'}${money(g.sum, base)}</b></span>
+      </li>`;
+      if (closed) continue;
+      for (const r of g.list) {
+        if (shown++ >= LIMIT) break;
+        html += recItemHTML(r, type, { hideCategory: true });
+      }
+    }
   }
-  if (all.length > shown.length) html += `<li class="empty">只顯示最新 ${shown.length} 筆，完整資料請匯出或開啟試算表</li>`;
+  if (shown > LIMIT) html += `<li class="empty">筆數太多，只顯示前 ${LIMIT} 筆；完整資料請匯出或開啟試算表</li>`;
   $('#detailList').innerHTML = html || '<li class="empty">這段期間沒有記錄</li>';
 }
 
@@ -885,7 +906,16 @@ function bindStats() {
   $('#periodLabel').onclick = () => { stats.anchor = todayStr(); renderStats(); };
   $('#rangeFrom').onchange = (e) => { stats.from = e.target.value; renderStats(); };
   $('#rangeTo').onchange = (e) => { stats.to = e.target.value; renderStats(); };
-  $('#detailList').addEventListener('click', (e) => onListClick(e));
+  $('#detailList').addEventListener('click', (e) => {
+    const head = e.target.closest('li[data-cat-key]');
+    if (head) {
+      const k = head.dataset.catKey;
+      if (collapsedCats.has(k)) collapsedCats.delete(k); else collapsedCats.add(k);
+      renderStats();
+      return;
+    }
+    onListClick(e);
+  });
   // 手機左右滑動切換期間
   let sx = null, sy = null;
   const sec = $('#tab-stats');

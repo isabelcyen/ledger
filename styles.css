@@ -123,6 +123,19 @@ input[type=radio] { width: auto; min-height: 0; margin: 0 .4rem 0 0; }
   padding: .55rem 0; border-top: 1px solid var(--line); cursor: pointer;
 }
 .rec-list li:first-child { border-top: 0; }
+.rec-list .cat-sep {
+  display: flex; justify-content: space-between; align-items: baseline; gap: .5rem;
+  margin-top: .6rem; padding: .5rem .6rem; border-top: 0; border-radius: 8px;
+  background: var(--bg); font-weight: 700; font-size: .92rem;
+}
+.rec-list .cat-sep:first-child { margin-top: 0; }
+.rec-list .cat-sep.expense { border-left: 4px solid var(--expense); }
+.rec-list .cat-sep.income { border-left: 4px solid var(--income); }
+.rec-list .cat-sep .caret { display: inline-block; width: 1em; color: var(--muted); }
+.rec-list .cat-sep .cat-sum { font-weight: 400; font-size: .82rem; color: var(--muted); white-space: nowrap; }
+.rec-list .cat-sep.expense b { color: var(--expense); }
+.rec-list .cat-sep.income b { color: var(--income); }
+.rec-list .cat-sep + li { border-top: 0; }
 .rec-list .date-sep { display: block; cursor: default; font-size: .8rem; color: var(--muted); padding: .6rem 0 .1rem; border-top: 0; }
 .rec-main { min-width: 0; }
 .rec-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

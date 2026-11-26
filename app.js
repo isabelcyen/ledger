@@ -342,11 +342,19 @@ async function quickVoice(type) {
     if (!text) return;
     const r = parseQuickEntry(text, data.categories[type]);
     const f = forms[type].form;
+    if (r.date) f.date.value = r.date;
+    if (r.time) f.time.value = r.time;
+    else if (r.date && r.date !== todayStr()) f.time.value = '12:00'; // 補記過去的帳但沒講時間
     if (r.category) f.category.value = r.category;
     if (r.item) f.item.value = r.item;
     if (!Number.isNaN(r.amount)) f.amount.value = r.amount;
     if (r.currency) setCurrency(type, r.currency);
-    toast(`辨識：「${text}」，確認後按儲存`);
+    const parts = [
+      r.date && r.date !== todayStr() ? r.date.slice(5).replace('-', '/') : '',
+      r.time || '', r.category || '', r.item || '',
+      Number.isNaN(r.amount) ? '（未聽到金額）' : money(r.amount, f.currency.value),
+    ].filter(Boolean);
+    toast(`「${text}」→ ${parts.join('・')}，確認後按儲存`);
     (Number.isNaN(r.amount) ? f.amount : forms[type].submit).focus();
   } catch (e) {
     toast(e.message, 'error');

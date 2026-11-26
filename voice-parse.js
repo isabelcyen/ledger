@@ -22,7 +22,7 @@ const CURRENCY_WORDS = [
 
 /** 全形數字與符號轉半形 */
 export function toHalfWidth(s) {
-  return String(s).replace(/[０-９．，＋]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  return String(s).replace(/[０-９．，＋：／]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 }
 
 /** 中文（或中阿混合）數字轉數值：一百二→120、兩萬三→23000、三千五百零五→3505、十二點五→12.5、3千5→3500 */
@@ -168,12 +168,113 @@ export function parseSpokenAmount(text) {
   return extractAmount(text).amount;
 }
 
+/* ============================================================
+ * 日期與時間
+ * ============================================================ */
+const pad2 = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const NUM_S = `[\\d${Object.keys(DIGIT).join('')}十拾]{1,4}`; // 日期、時間用的小數字
+const WEEKDAY = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
+const PERIOD = '凌晨|半夜|清晨|早上|上午|中午|下午|傍晚|晚上|今早|今晚|昨晚|昨天晚上';
+
+function validDate(y, m, d) {
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d ? dt : null;
+}
+
 /**
- * 一句話記帳：「午餐 牛肉麵 150 元」→ { category:'午餐', item:'牛肉麵', amount:150, currency:null }
+ * 從一段話抽出日期與時間。
+ * 回傳 { date: 'YYYY-MM-DD' | null, time: 'HH:MM' | null, rest }
+ * 支援：今天／昨天／前天／大前天／明天、上週五／星期三／禮拜天、11月20號、十一月二十日、
+ *       2026年11月20日、2026/11/20、11/20、20號；
+ *       早上8點、下午三點半、晚上7點15分、中午12點、19:30、昨晚8點
+ */
+export function extractDateTime(raw, now = new Date()) {
+  let t = toHalfWidth(String(raw || ''));
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let date = null, time = null;
+  const cut = (m) => { t = t.slice(0, m.index) + ' ' + t.slice(m.index + m[0].length); };
+  const n = (s) => cnToNumber(s);
+  // 沒講年份時：若日期落在未來，視為去年（例：一月初補記十二月的帳）
+  const pastYear = (m, d) => {
+    let dt = validDate(today.getFullYear(), m, d);
+    if (dt && dt > today) dt = validDate(today.getFullYear() - 1, m, d);
+    return dt;
+  };
+
+  // ---- 日期 ----
+  const datePatterns = [
+    [/(\d{4})\s*[年/.-]\s*(\d{1,2})\s*[月/.-]\s*(\d{1,2})\s*[日號号]?/, (m) => validDate(+m[1], +m[2], +m[3])],
+    [new RegExp(`(${NUM_S})\\s*月\\s*(${NUM_S})\\s*[日號号]?`), (m) => pastYear(n(m[1]), n(m[2]))],
+    [/(?<![\d.])(\d{1,2})\/(\d{1,2})(?![\d/])/, (m) => pastYear(+m[1], +m[2])],
+    [/(大前天|前天|昨天|昨日|昨晚|今天|今日|今早|今晚|明天|明日)/, (m) => {
+      const off = { 大前天: -3, 前天: -2, 昨天: -1, 昨日: -1, 昨晚: -1, 今天: 0, 今日: 0, 今早: 0, 今晚: 0, 明天: 1, 明日: 1 }[m[1]];
+      const d = new Date(today); d.setDate(d.getDate() + off); return d;
+    }],
+    [/(上上|上個?|這個?|这个?|本)?\s*(?:週|周|星期|禮拜|礼拜)\s*([一二三四五六日天])/, (m) => {
+      const target = WEEKDAY[m[2]];
+      const mondayIdx = (today.getDay() + 6) % 7; // 今天是本週第幾天（週一=0）
+      const targetIdx = (target + 6) % 7;
+      const d = new Date(today);
+      if (!m[1]) { // 沒講「上／這」：取最近一次（不含未來）
+        let back = mondayIdx - targetIdx;
+        if (back < 0) back += 7;
+        d.setDate(d.getDate() - back);
+      } else {
+        const weeks = m[1].startsWith('上上') ? 2 : m[1].startsWith('上') ? 1 : 0;
+        d.setDate(d.getDate() - mondayIdx + targetIdx - 7 * weeks);
+      }
+      return d;
+    }],
+    [new RegExp(`(?<![月\\d])(${NUM_S})\\s*[號号日](?!本|幣)`), (m) => {
+      const day = n(m[1]);
+      let dt = validDate(today.getFullYear(), today.getMonth() + 1, day);
+      if (dt && dt > today) { const p = new Date(today.getFullYear(), today.getMonth() - 1, 1); dt = validDate(p.getFullYear(), p.getMonth() + 1, day); }
+      return dt;
+    }],
+  ];
+  for (const [re, fn] of datePatterns) {
+    const m = t.match(re);
+    if (!m) continue;
+    const d = fn(m);
+    if (d) {
+      date = ymd(d);
+      // 「昨晚」「今晚」同時帶有時段意義，保留給時間判斷用
+      if (/^(昨晚|今晚|今早)$/.test(m[1])) t = t.replace(m[0], m[1] === '今早' ? ' 早上 ' : ' 晚上 ');
+      else cut(m);
+      break;
+    }
+  }
+
+  // ---- 時間 ----
+  const timeRe = new RegExp(
+    `(${PERIOD})?\\s*(?:(\\d{1,2}):(\\d{2})|(${NUM_S})\\s*(?:點鐘|點|点|時|时)\\s*(?:(半)|(${NUM_S})\\s*分?)?)(?!\\s*(?:元|塊|块|圓|${NUM_S}))`);
+  const m = t.match(timeRe);
+  if (m) {
+    let h = m[2] != null ? +m[2] : n(m[4]);
+    let mi = m[3] != null ? +m[3] : m[5] ? 30 : m[6] ? n(m[6]) : 0;
+    const p = m[1] || '';
+    if (/下午|傍晚|晚上|今晚|昨晚/.test(p) && h < 12) h += 12;
+    else if (/中午/.test(p) && h < 6) h += 12; // 中午一點 = 13:00
+    else if (/凌晨|半夜/.test(p) && h === 12) h = 0;
+    if (Number.isInteger(h) && h >= 0 && h <= 24 && Number.isInteger(mi) && mi >= 0 && mi < 60) {
+      time = `${pad2(h % 24)}:${pad2(mi)}`;
+      cut(m);
+    }
+  }
+  // 只講時段（如「晚上 晚餐 拉麵」）時，把時段字詞拿掉，不設時間
+  t = t.replace(new RegExp(`(${PERIOD})`, 'g'), ' ');
+  return { date, time, rest: t.replace(/\s+/g, ' ').trim() };
+}
+
+/**
+ * 一句話記帳：「昨天晚上七點 晚餐 牛肉麵 150 元」
+ * → { date:'2026-11-25', time:'19:00', category:'晚餐', item:'牛肉麵', amount:150, currency:null }
  * categories：現有類別清單，會挑出文字中出現的最長類別名稱
  */
-export function parseQuickEntry(text, categories = []) {
-  const { amount, currency, rest } = extractAmount(text);
+export function parseQuickEntry(text, categories = [], now = new Date()) {
+  const dt = extractDateTime(text, now);
+  const { amount, currency, rest } = extractAmount(dt.rest);
   let category = null;
   for (const c of [...categories].sort((a, b) => b.length - a.length)) {
     if (c && rest.includes(c)) { category = c; break; }
@@ -183,5 +284,5 @@ export function parseQuickEntry(text, categories = []) {
     const without = rest.replace(category, ' ').replace(/\s+/g, ' ').trim();
     item = without || category;
   }
-  return { category, item, amount, currency };
+  return { date: dt.date, time: dt.time, category, item, amount, currency };
 }

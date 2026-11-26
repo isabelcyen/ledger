@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="記帳">
+  <title>個人記帳</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">💰 個人記帳</div>
+    <button id="syncStatus" class="status" type="button" title="點一下重新同步">…</button>
+    <button id="btnSettings" class="icon-btn" type="button" aria-label="設定">⚙️</button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="expense" class="active">支出</button>
+    <button type="button" role="tab" data-tab="income">收入</button>
+    <button type="button" role="tab" data-tab="stats">統計</button>
+    <button type="button" role="tab" data-tab="io">匯出/入</button>
+  </nav>
+
+  <main>
+    <section id="tab-expense" class="tab active" data-type="expense"></section>
+    <section id="tab-income" class="tab" data-type="income"></section>
+
+    <!-- ========== 統計 ========== -->
+    <section id="tab-stats" class="tab">
+      <div class="card">
+        <div class="seg" id="granSeg">
+          <button type="button" data-gran="day">日</button>
+          <button type="button" data-gran="week">週</button>
+          <button type="button" data-gran="month" class="active">月</button>
+          <button type="button" data-gran="year">年</button>
+          <button type="button" data-gran="custom">自訂</button>
+        </div>
+        <div class="period" id="periodNav">
+          <button type="button" class="btn icon" id="prevPeriod" aria-label="上一期">‹</button>
+          <button type="button" class="period-label" id="periodLabel" title="回到本期"></button>
+          <button type="button" class="btn icon" id="nextPeriod" aria-label="下一期">›</button>
+        </div>
+        <div class="grid2 hidden" id="customRange">
+          <label>起<input type="date" id="rangeFrom"></label>
+          <label>迄<input type="date" id="rangeTo"></label>
+        </div>
+      </div>
+
+      <div class="summary" id="summary"></div>
+      <p class="muted small" id="rateNote"></p>
+
+      <div class="card">
+        <h3>收支趨勢</h3>
+        <div id="trendChart" class="chart"></div>
+      </div>
+
+      <div class="card">
+        <div class="list-head"><h3>支出類別</h3><span class="muted small" id="expCatTotal"></span></div>
+        <div id="expCats" class="catbars"></div>
+      </div>
+      <div class="card">
+        <div class="list-head"><h3>收入類別</h3><span class="muted small" id="incCatTotal"></span></div>
+        <div id="incCats" class="catbars"></div>
+      </div>
+
+      <div class="card">
+        <h3>依原幣別</h3>
+        <div id="byCurrency"></div>
+      </div>
+
+      <div class="card">
+        <div class="list-head"><h3>明細</h3><span class="muted small" id="detailCount"></span></div>
+        <ul class="rec-list" id="detailList"></ul>
+      </div>
+    </section>
+
+    <!-- ========== 匯出/入 ========== -->
+    <section id="tab-io" class="tab">
+      <div class="card">
+        <h2>匯出</h2>
+        <label>範圍
+          <select id="exportScope">
+            <option value="all">全部資料</option>
+            <option value="period">目前「統計」頁的區間</option>
+          </select>
+        </label>
+        <div class="actions wrap">
+          <button type="button" class="btn primary" id="btnExportCsv">匯出 CSV（Excel 可開）</button>
+          <button type="button" class="btn" id="btnExportJson">匯出 JSON 完整備份</button>
+        </div>
+        <p class="muted small">CSV 含 BOM，用 Excel 直接開也不會亂碼。JSON 備份會包含類別與匯率設定。</p>
+        <p class="small" id="sheetLinkWrap"></p>
+      </div>
+
+      <div class="card">
+        <h2>匯入</h2>
+        <p class="muted small">支援本系統匯出的 CSV／JSON。CSV 欄位：類型、日期、時間、類別、項目、金額、幣別、備註（ID 可省略）。相同 ID 的記錄會自動略過，不會重複。</p>
+        <input type="file" id="importFile" accept=".csv,.json,text/csv,application/json">
+        <div id="importPreview" class="import-preview hidden"></div>
+        <div class="actions wrap">
+          <button type="button" class="btn primary hidden" id="btnDoImport">確認匯入</button>
+          <button type="button" class="btn ghost" id="btnCsvTemplate">下載 CSV 範本</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ========== 支出 / 收入 共用表單樣板 ========== -->
+  <template id="entryTpl">
+    <form class="card entry-form" autocomplete="off" novalidate>
+      <div class="form-head">
+        <h2 data-role="title"></h2>
+        <button type="button" class="btn ghost voice-quick" data-role="quickVoice">🎤 一句話記帳</button>
+      </div>
+      <div class="grid2">
+        <label>日期<input type="date" name="date" required></label>
+        <label>時間<input type="time" name="time" required></label>
+      </div>
+      <label>類別
+        <span class="row">
+          <select name="category" required></select>
+          <button type="button" class="btn icon" data-role="addCat" title="新增類別" aria-label="新增類別">＋</button>
+        </span>
+      </label>
+      <div class="row newcat hidden" data-role="newCatBox">
+        <input type="text" data-role="newCatInput" placeholder="輸入新類別名稱" maxlength="20">
+        <button type="button" class="btn primary" data-role="newCatOk">新增</button>
+        <button type="button" class="btn ghost" data-role="newCatCancel">取消</button>
+      </div>
+      <label>項目
+        <span class="row">
+          <input type="text" name="item" required maxlength="100" data-role="itemInput">
+          <button type="button" class="btn icon mic" data-voice="item" aria-label="語音輸入項目">🎤</button>
+        </span>
+      </label>
+      <div class="grid2 amount-row">
+        <label><span data-role="amountLabel"></span>
+          <span class="row">
+            <input type="text" inputmode="decimal" name="amount" required placeholder="0">
+            <button type="button" class="btn icon mic" data-voice="amount" aria-label="語音輸入金額">🎤</button>
+          </span>
+        </label>
+        <label>幣別<select name="currency"></select></label>
+      </div>
+      <label>備註（選填）<input type="text" name="note" maxlength="200"></label>
+      <div class="actions">
+        <button type="submit" class="btn primary grow" data-role="submit">儲存</button>
+        <button type="button" class="btn ghost hidden" data-role="cancelEdit">取消編輯</button>
+      </div>
+    </form>
+    <div class="card">
+      <div class="list-head"><h3>最近記錄</h3><span class="muted small" data-role="todaySum"></span></div>
+      <ul class="rec-list" data-role="recent"></ul>
+    </div>
+  </template>
+
+  <!-- ========== 設定 ========== -->
+  <dialog id="settingsDlg">
+    <form method="dialog" class="dlg" id="settingsForm">
+      <div class="dlg-head"><h2>設定</h2><button value="cancel" class="icon-btn" aria-label="關閉">✕</button></div>
+
+      <fieldset>
+        <legend>資料儲存位置</legend>
+        <label class="radio"><input type="radio" name="mode" value="sheet"> Google 試算表（正式使用）</label>
+        <label class="radio"><input type="radio" name="mode" value="demo"> 示範模式（只存在這台裝置的瀏覽器）</label>
+        <div id="sheetFields">
+          <label>Apps Script 網址（…/exec）<input type="url" id="cfgUrl" placeholder="https://script.google.com/macros/s/…/exec"></label>
+          <label>API Token<input type="password" id="cfgToken" autocomplete="off" placeholder="setup 執行紀錄中的 Token"></label>
+          <div class="actions"><button type="button" class="btn" id="btnTest">測試連線</button><span class="small" id="testResult"></span></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>幣別與匯率</legend>
+        <label>統計基準幣別<select id="cfgBase"></select></label>
+        <p class="muted small">匯率 = 1 單位外幣等於多少基準幣。統計時會換算後加總。</p>
+        <div id="rateTable" class="rate-table"></div>
+        <div class="row">
+          <input type="text" id="newCurrency" placeholder="新增幣別代碼，如 THB" maxlength="3">
+          <button type="button" class="btn" id="btnAddCurrency">加入</button>
+        </div>
+        <div class="actions"><button type="button" class="btn ghost" id="btnFetchRates">🌐 線上更新匯率</button><span class="small muted" id="rateFetchInfo"></span></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>類別管理</legend>
+        <div class="grid2">
+          <div><h4>支出</h4><ul class="chip-list" id="catListExpense"></ul></div>
+          <div><h4>收入</h4><ul class="chip-list" id="catListIncome"></ul></div>
+        </div>
+        <p class="muted small">在支出／收入頁按「＋」即可隨時新增類別；刪除類別不會刪掉既有記錄。</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>語音輸入</legend>
+        <label>辨識語言
+          <select id="cfgLang">
+            <option value="zh-TW">中文（台灣）</option>
+            <option value="cmn-Hant-TW">國語（繁體，替代代碼）</option>
+            <option value="en-US">English (US)</option>
+            <option value="ja-JP">日本語</option>
+          </select>
+        </label>
+        <p class="muted small" id="voiceSupport"></p>
+      </fieldset>
+
+      <div class="actions spread">
+        <button type="button" class="btn ghost danger" id="btnClearLocal">清除本機快取</button>
+        <button type="button" class="btn primary" id="btnSaveSettings">儲存設定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="voiceOverlay" class="voice-overlay hidden"><div class="voice-box"><div class="pulse">🎤</div><p id="voiceHint">請說話…</p><button type="button" class="btn" id="voiceStop">停止</button></div></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
